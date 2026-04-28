@@ -414,7 +414,7 @@ func TestHasChanges_NoSourceFiles(t *testing.T) {
 	idx := New(store)
 	dir := t.TempDir()
 	writeFile(t, dir, "README.md", "# readme\n")
-	writeFile(t, dir, "data.json", "{}\n")
+	writeFile(t, dir, "notes.txt", "free-form notes\n")
 
 	p := db.Project{
 		ID:        "proj",
@@ -494,7 +494,7 @@ func TestIndex_NonSourceFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Write only non-source files
 	writeFile(t, dir, "README.md", "# readme\n")
-	writeFile(t, dir, "data.json", `{"key":"value"}`)
+	writeFile(t, dir, "notes.txt", "free-form notes\n")
 	writeFile(t, dir, ".gitignore", "*.tmp\n")
 
 	result, err := idx.Index(context.Background(), dir, false)
