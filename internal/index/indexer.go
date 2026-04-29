@@ -328,6 +328,11 @@ func (idx *Indexer) Index(ctx context.Context, repoPath string, force bool) (*In
 		"ms", duration.Milliseconds(),
 	)
 
+	// Refresh query-planner stats if stale. PRAGMA optimize is a no-op when
+	// nothing's changed, so it's safe to call even on incremental indexes
+	// where most files were skipped via content-hash.
+	_ = idx.store.Optimize()
+
 	return &IndexResult{
 		ProjectID:  projectID,
 		Project:    projectName,

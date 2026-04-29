@@ -116,6 +116,16 @@ func (s *Store) DB() *sql.DB { return s.db }
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// Optimize runs SQLite's PRAGMA optimize — a lightweight stats refresh that
+// returns in milliseconds when nothing's changed and only does real work when
+// query-planner stats have gone stale (e.g. after a large index batch). Call
+// this at the tail of a large Index() run; cheap insurance for Cypher query
+// planning as the symbol table grows.
+func (s *Store) Optimize() error {
+	_, err := s.db.Exec("PRAGMA optimize")
+	return err
+}
+
 // schemaMigrations is an ordered list of incremental SQL migrations applied
 // after the baseline schema. migrations[i] upgrades version (i+1) → (i+2).
 // To add a schema change: append a SQL string here and bump nothing else —
