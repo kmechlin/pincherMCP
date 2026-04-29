@@ -2073,6 +2073,26 @@ func TestMigrate_SchemaVersionAfterReopen(t *testing.T) {
 	}
 }
 
+func TestMigrate_AnalyzeOnFreshDB(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	// migrate() seeds sqlite_stat1 with one ANALYZE on a brand-new DB so
+	// PRAGMA optimize has somewhere to write stats from the first index
+	// onwards. The table must exist after Open even though the DB is empty.
+	var name string
+	err = s.db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`,
+	).Scan(&name)
+	if err != nil {
+		t.Errorf("sqlite_stat1 not created on fresh DB: %v", err)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DataDir — idempotency
 // ─────────────────────────────────────────────────────────────────────────────

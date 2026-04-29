@@ -200,10 +200,17 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("create schema_version: %w", err)
 	}
 	// Insert v1 only if the table is empty (fresh DB or pre-versioning DB).
-	if _, err := s.db.Exec(
+	// RowsAffected tells us whether this was a brand-new DB so we can seed
+	// sqlite_stat1 once at the end of migrate.
+	res, err := s.db.Exec(
 		`INSERT INTO schema_version(version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version)`,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("init schema_version: %w", err)
+	}
+	freshDB := false
+	if n, raErr := res.RowsAffected(); raErr == nil && n > 0 {
+		freshDB = true
 	}
 
 	// Step 3: read current version.
@@ -233,6 +240,16 @@ func (s *Store) migrate() error {
 		if _, err := s.db.Exec(`UPDATE schema_version SET version = ?`, next); err != nil {
 			return fmt.Errorf("bump schema version to %d: %w", next, err)
 		}
+	}
+
+	// Step 5: on a brand-new DB, seed sqlite_stat1 with one ANALYZE pass.
+	// PRAGMA optimize (Store.Optimize, run after each Index) is a no-op when
+	// sqlite_stat1 doesn't exist, so without this seed the planner has no
+	// stats for the first few index runs and Cypher queries pick suboptimal
+	// plans. Sub-ms on empty tables; non-fatal on error because optimize
+	// will eventually populate stats once enough writes accumulate.
+	if freshDB {
+		_, _ = s.db.Exec(`ANALYZE`)
 	}
 	return nil
 }
