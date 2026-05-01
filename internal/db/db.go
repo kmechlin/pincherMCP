@@ -108,19 +108,24 @@ func Open(dir string) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	// WAL guardrails. Both PRAGMAs are silent no-ops when journal_mode is
-	// not WAL (e.g. an older binary missing the DSN fix), so they're safe
-	// to apply unconditionally on every Open. Once WAL is engaged they
-	// bound the worst case: pincher has been observed accumulating a 70 GB
-	// WAL when 4+ concurrent processes wrote to the same DB without any
-	// process going idle long enough to trigger an auto-checkpoint.
+	// WAL guardrail — silent no-op when journal_mode is not WAL.
 	//
-	//   wal_autocheckpoint = 100   ← checkpoint at 400 KB instead of the
-	//                                4 MB default; more frequent rollups,
-	//                                bounded WAL under sustained writes.
-	//   journal_size_limit (256MB) ← physically truncate the WAL when it
-	//                                exceeds this limit after a checkpoint.
-	_, _ = db.Exec("PRAGMA wal_autocheckpoint = 100")
+	// journal_size_limit caps the WAL at 256 MB. After any checkpoint that
+	// finds the WAL exceeding this size, SQLite truncates it. Combined with
+	// the explicit CheckpointTruncate() call at the tail of Index(), this
+	// keeps the WAL bounded under normal operation without paying the
+	// per-write checkpoint cost an aggressive wal_autocheckpoint would
+	// impose.
+	//
+	// History note: an earlier version of this branch also set
+	// wal_autocheckpoint = 100 to defend against the 70 GB WAL observed
+	// under the 2026-04-29 multi-writer storm. That setting cost an
+	// empirical 14.5× slowdown on heavy single-writer indexing (the
+	// 484K-symbol thinksmart corpus went from 78s to 1124s), so we
+	// reverted to the SQLite default of 1000 pages. The real defense
+	// against that storm is the cross-process lockfile + the --hook
+	// bloat-trap guard, which together prevent the multi-writer scenario
+	// that starved checkpoints in the first place.
 	_, _ = db.Exec("PRAGMA journal_size_limit = 268435456")
 
 	return s, nil

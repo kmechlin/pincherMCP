@@ -2093,25 +2093,28 @@ func TestMigrate_AnalyzeOnFreshDB(t *testing.T) {
 	}
 }
 
-func TestOpen_WALGuardrailsApplied(t *testing.T) {
+func TestOpen_WALGuardrailApplied(t *testing.T) {
 	s := newTestStore(t)
 
-	// Both PRAGMAs are session-local in SQLite. With pool=1, this
-	// connection's settings are what subsequent queries observe.
-	var checkpoint int
-	if err := s.db.QueryRow("PRAGMA wal_autocheckpoint").Scan(&checkpoint); err != nil {
-		t.Fatalf("read wal_autocheckpoint: %v", err)
-	}
-	if checkpoint != 100 {
-		t.Errorf("wal_autocheckpoint = %d, want 100", checkpoint)
-	}
-
+	// journal_size_limit is session-local in SQLite. With pool=1, this
+	// connection's setting is what subsequent queries observe.
 	var sizeLimit int64
 	if err := s.db.QueryRow("PRAGMA journal_size_limit").Scan(&sizeLimit); err != nil {
 		t.Fatalf("read journal_size_limit: %v", err)
 	}
 	if sizeLimit != 268435456 {
 		t.Errorf("journal_size_limit = %d, want 268435456", sizeLimit)
+	}
+
+	// wal_autocheckpoint is left at the SQLite default (1000 pages). An
+	// earlier version of this branch lowered it to 100; that change cost
+	// 14.5× on heavy single-writer indexing and was reverted.
+	var checkpoint int
+	if err := s.db.QueryRow("PRAGMA wal_autocheckpoint").Scan(&checkpoint); err != nil {
+		t.Fatalf("read wal_autocheckpoint: %v", err)
+	}
+	if checkpoint != 1000 {
+		t.Errorf("wal_autocheckpoint = %d, want default 1000", checkpoint)
 	}
 }
 
