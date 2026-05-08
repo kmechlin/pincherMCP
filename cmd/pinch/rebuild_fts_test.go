@@ -1,13 +1,26 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/pincherMCP/pincher/internal/db"
 )
+
+// pincherBinaryName returns the platform-appropriate name for a pincher
+// binary built into a temp dir. On Windows `go build -o foo` writes
+// `foo.exe`; the exec call must use the actual filename or it will fail
+// with "executable not found" even though the file exists right there.
+func pincherBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "pincher.exe"
+	}
+	return "pincher"
+}
 
 // TestRebuildFTSCLI_Binary runs the actual `pincher rebuild-fts` binary
 // against a fresh DB so the subcommand wiring (dispatch, flags, output
@@ -19,7 +32,7 @@ func TestRebuildFTSCLI_Binary(t *testing.T) {
 		t.Skip("skipping CLI binary build in -short mode")
 	}
 
-	bin := filepath.Join(t.TempDir(), "pincher")
+	bin := filepath.Join(t.TempDir(), pincherBinaryName())
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -61,23 +74,34 @@ func TestRebuildFTSCLI_Binary(t *testing.T) {
 }
 
 // TestRebuildFTSCLI_BadDataDir asserts that a corrupt / non-existent data
-// directory produces a clean error exit, not a panic.
+// directory produces a clean error exit, not a panic. We pass a regular
+// FILE (not a directory) as the data-dir; `db.Open` will then try to open
+// `<file>/pincher.db` which fails identically on every platform — no
+// platform-specific magic paths needed (the original /proc/1 hack was
+// Linux-only and broke Windows CI).
 func TestRebuildFTSCLI_BadDataDir(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping CLI binary build in -short mode")
 	}
 
-	bin := filepath.Join(t.TempDir(), "pincher")
+	bin := filepath.Join(t.TempDir(), pincherBinaryName())
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 
-	// Pass a path under a non-writable parent — opening should fail.
-	cmd := exec.Command(bin, "rebuild-fts", "--data-dir", "/proc/1/no-such-place")
+	// Create a regular file and use it as --data-dir — Open will try to
+	// join it with "pincher.db" and the resulting path is not a valid
+	// SQLite database location on any platform.
+	notADir := filepath.Join(t.TempDir(), "not_a_dir")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write notADir: %v", err)
+	}
+
+	cmd := exec.Command(bin, "rebuild-fts", "--data-dir", notADir)
 	out, _ := cmd.CombinedOutput()
-	// We don't assert exit code (Go subprocess behavior varies); just
-	// that we got a recognisable failure message, not a panic.
+	// We don't assert exit code (subprocess behavior varies); just that
+	// we got a recognisable failure message, not a panic.
 	if !strings.Contains(string(out), "failed") {
 		t.Errorf("expected 'failed' in stderr, got:\n%s", out)
 	}
