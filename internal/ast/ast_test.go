@@ -32,7 +32,6 @@ func TestDetectLanguage(t *testing.T) {
 		{"view.swift", "Swift"},
 		{"unknown.xyz", ""},
 		{"noext", ""},
-		{"README.md", ""},
 		{"site.yml", "YAML"},
 		{"values.yaml", "YAML"},
 		{"data.json", "JSON"},
@@ -49,8 +48,8 @@ func TestIsSourceFile(t *testing.T) {
 	if !IsSourceFile("main.go") {
 		t.Error("main.go should be a source file")
 	}
-	if IsSourceFile("README.md") {
-		t.Error("README.md should not be a source file")
+	if IsSourceFile("notes.txt") {
+		t.Error("notes.txt should not be a source file")
 	}
 	if !IsSourceFile("data.json") {
 		t.Error("data.json should be a source file (JSON support)")
