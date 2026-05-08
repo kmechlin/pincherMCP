@@ -5,7 +5,7 @@
 <div align="center">
 
 [![CI](https://github.com/kwad77/pincherMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/kwad77/pincherMCP/actions/workflows/ci.yml)
-[![Go 1.24](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](https://golang.org)
+[![Go 1.25](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e.svg)](LICENSE)
 [![Coverage](https://img.shields.io/badge/coverage-84%25-22c55e.svg)](#development)
 
@@ -306,7 +306,7 @@ All latencies measured on this codebase (13 files, 618 symbols, 5,785 edges). To
 | `adr` | Persistent key/value store per project. Survives context resets and binary upgrades. Actions: `get`, `set`, `list`, `delete`. Use to record architectural decisions, known gotchas, or onboarding notes that outlive the conversation. | <1ms |
 | `health` | Schema version, index staleness, per-language extraction coverage. Use to detect stale indexes. | 1ms |
 | `stats` | Session savings as a formatted CLI summary: without-pincher baseline, with-pincher actual, tokens saved, cost avoided, avg latency. Persists across reconnects. | 8ms |
-| `fetch` | Fetch a URL, extract its text, and store it as a searchable `Document` symbol in the project knowledge base. Use for API docs, READMEs, or specs you want to query later. Body cap: 512 KB fetched (enforced via `io.LimitReader` regardless of upstream `Content-Length`), 32 KB stored. Only `http` and `https` schemes are allowed. URLs that resolve to loopback, link-local (e.g. `169.254.169.254` cloud metadata), private (RFC1918), multicast, or unspecified addresses are refused — the same SSRF block-list applies to every redirect target, capped at 5 redirects. 15-second per-request deadline. Retrieve via `search kind:Document` or `symbol`. | ~200ms (network) |
+| `fetch` | Fetch a URL, extract its text, and store it as a searchable `Document` symbol in the project knowledge base. Use for API docs, READMEs, or specs you want to query later. Body cap: 512 KB fetched, 32 KB stored. Retrieve via `search kind:Document` or `symbol`. | ~200ms (network) |
 
 ### Stable Symbol IDs
 
@@ -341,7 +341,7 @@ Every symbol carries an `extraction_confidence` score surfaced in search results
 
 | Score | Parser | Languages |
 |---|---|---|
-| `1.0` | `go/ast` full AST / `gopkg.in/yaml.v3` Node tree | Go, YAML, JSON |
+| `1.0` | `go/ast` full AST / `gopkg.in/yaml.v3` Node tree / `mvdan.cc/sh/v3` shell parser | Go, YAML, JSON, Bash |
 | `0.85` | Stable regex | Python, JavaScript, JSX, TypeScript, TSX, Rust, Java |
 | `0.70` | Approximate regex | Ruby, PHP, C, C++, C#, Kotlin, Swift |
 
@@ -393,6 +393,7 @@ RETURN f.name, f.file_path LIMIT 50
 |---|---|---|---|
 | Go | `go/ast` full AST | 1.0 | Functions, Methods, Types, Interfaces, Structs, Constants, Variables |
 | YAML / JSON | `gopkg.in/yaml.v3` Node tree | 1.0 | Settings (dotted-path keys, sequence elements, multi-doc-aware) |
+| Bash | `mvdan.cc/sh/v3/syntax` (the `shfmt` parser) | 1.0 | Functions (POSIX `name() { … }` and reserved-word `function name { … }` styles; covers `.sh`, `.bash`) |
 | Python | Regex | 0.85 | Functions, Classes, Methods |
 | TypeScript / TSX | Regex | 0.85 | Functions, Classes, Interfaces, Methods |
 | JavaScript / JSX | Regex | 0.85 | Functions, Classes, Methods |
@@ -405,7 +406,7 @@ RETURN f.name, f.file_path LIMIT 50
 | Kotlin | Regex | 0.70 | Functions, Classes |
 | Swift | Regex | 0.70 | Functions, Classes |
 
-Files in Scala, Lua, Zig, Elixir, Haskell, Dart, Bash, and R are detected as source files but skipped — no extraction yet.
+Files in Scala, Lua, Zig, Elixir, Haskell, Dart, and R are detected as source files but skipped — no extraction yet.
 
 Go and YAML/JSON have full parser-based extraction (confidence 1.0). All other languages use regex patterns. The interface is stable: replace any language's extractor with tree-sitter bindings and confidence jumps to 1.0 with no other changes.
 
@@ -482,7 +483,7 @@ Responses compress ~65% with `Accept-Encoding: gzip`.
 
 **Tested clients:** curl, Python `requests`, PowerShell `Invoke-WebRequest`
 
-**Rate limiting:** `--http-rate 60` limits to 60 requests/IP/minute (0 = unlimited). When combined with `--trust-proxy`, the rate-limit key is derived from the leftmost entry in `X-Forwarded-For` instead of the TCP source address — so per-client limits apply correctly behind a reverse proxy. Without `--trust-proxy`, `X-Forwarded-For` is ignored: direct callers cannot spoof the key by setting the header themselves.
+**Rate limiting:** `--http-rate 60` limits to 60 requests/IP/minute (0 = unlimited).
 
 ### Additional HTTP endpoints
 
@@ -550,7 +551,7 @@ Savings persist in SQLite across reconnects, process restarts, and binary upgrad
 
 ### Requirements
 
-- Go 1.24+ (pure Go — no CGO, no C compiler) — only needed if building from source
+- Go 1.25+ (pure Go — no CGO, no C compiler) — only needed if building from source. Bumped from 1.24 by the `mvdan.cc/sh/v3 v3.13.1` dependency in the Bash extractor.
 - Git (for the `changes` blast-radius tool)
 
 ### Managed installs
