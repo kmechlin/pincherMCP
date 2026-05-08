@@ -227,8 +227,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Rate limiting — per remote IP sliding window.
-	ip, _, _ := strings.Cut(r.RemoteAddr, ":")
+	// Rate limiting — per remote IP sliding window. Honors X-Forwarded-For
+	// when --trust-proxy is on so the rate-key reflects the real client
+	// behind a reverse proxy (issue #40).
+	ip := s.clientIP(r)
 	if !s.allowRequest(ip) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		json.NewEncoder(w).Encode(map[string]any{"error": fmt.Sprintf("rate limit exceeded — max %d requests per %s", s.rateLimit, s.rateWindow)})
@@ -543,6 +545,41 @@ func (s *Server) effectivePrefix(r *http.Request) string {
 		}
 	}
 	return s.basePath
+}
+
+// clientIP returns the rate-limit / logging key for r. Behaviour:
+//
+//   - When trustProxy is on and X-Forwarded-For is present: use the leftmost
+//     non-empty entry in the comma-separated list. RFC 7239 / X-Forwarded-For
+//     convention: each proxy appends its own peer to the right, so the
+//     leftmost entry is the original client and the rightmost is the proxy
+//     immediately upstream of pincher.
+//   - Otherwise: extract the host portion of r.RemoteAddr via net.SplitHostPort,
+//     which correctly handles bracketed IPv6 forms like "[::1]:8080" that
+//     the previous strings.Cut(":") implementation mangled into "[".
+//   - On any parse failure: fall back to r.RemoteAddr unchanged. Better to
+//     have a key (even an imperfect one) than no rate limiting at all.
+//
+// Spoof gate: when trustProxy is off (the default), X-Forwarded-For is
+// IGNORED — direct callers MUST NOT influence the rate-limit key by setting
+// the header themselves. This mirrors the trust gate used by effectivePrefix
+// for X-Forwarded-Prefix.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Comma-separated list — take the leftmost entry (original client).
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				xff = xff[:i]
+			}
+			if ip := strings.TrimSpace(xff); ip != "" {
+				return ip
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // SetRateLimit caps HTTP requests to limit per window duration per remote IP.

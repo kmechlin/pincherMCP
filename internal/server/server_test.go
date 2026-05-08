@@ -2734,3 +2734,174 @@ func TestServeHTTP_Dashboard_NoBasePath(t *testing.T) {
 		t.Error("dashboard still contains unresolved placeholder")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// clientIP / rate-limit + X-Forwarded-For (issue #40)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// reqWithRemoteAndHeaders builds a request with the given RemoteAddr and
+// header bag. Used throughout the clientIP / rate-limit XFF tests.
+func reqWithRemoteAndHeaders(remote string, headers map[string]string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/v1/list", strings.NewReader("{}"))
+	req.RemoteAddr = remote
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return req
+}
+
+func TestClientIP_TrustProxyOff_IgnoresXFF(t *testing.T) {
+	// Spoof gate: when --trust-proxy is OFF (the default), X-Forwarded-For
+	// MUST be ignored. A direct caller cannot influence the rate-limit key
+	// by adding the header. This is the security invariant — without it,
+	// any client could pretend to be a different IP per request.
+	srv, _, _ := newTestServer(t)
+	// trustProxy stays at its zero value (false).
+
+	r := reqWithRemoteAndHeaders("10.0.0.1:5555", map[string]string{
+		"X-Forwarded-For": "1.2.3.4",
+	})
+	got := srv.clientIP(r)
+	if got != "10.0.0.1" {
+		t.Errorf("trustProxy=false with XFF set: got %q, want %q (RemoteAddr host)", got, "10.0.0.1")
+	}
+}
+
+func TestClientIP_TrustProxyOn_UsesXFF(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.SetTrustProxy(true)
+
+	r := reqWithRemoteAndHeaders("10.0.0.1:5555", map[string]string{
+		"X-Forwarded-For": "1.2.3.4",
+	})
+	got := srv.clientIP(r)
+	if got != "1.2.3.4" {
+		t.Errorf("trustProxy=true with XFF=1.2.3.4: got %q, want %q", got, "1.2.3.4")
+	}
+}
+
+func TestClientIP_TrustProxyOn_LeftmostInChain(t *testing.T) {
+	// XFF chain semantics: each proxy appends to the right. Leftmost is
+	// the original client; rightmost is the proxy immediately upstream of
+	// pincher. We rate-limit on the original client.
+	srv, _, _ := newTestServer(t)
+	srv.SetTrustProxy(true)
+
+	r := reqWithRemoteAndHeaders("10.0.0.1:5555", map[string]string{
+		"X-Forwarded-For": "1.2.3.4, 5.6.7.8, 9.10.11.12",
+	})
+	got := srv.clientIP(r)
+	if got != "1.2.3.4" {
+		t.Errorf("trustProxy=true with XFF chain: got %q, want %q (leftmost)", got, "1.2.3.4")
+	}
+}
+
+func TestClientIP_TrustProxyOn_NoXFF_FallsBackToRemoteAddr(t *testing.T) {
+	// Graceful fallback: trust-proxy on, but no XFF header set (e.g. the
+	// proxy in front of pincher didn't add one). Use RemoteAddr — the
+	// fallback is the same shape as trustProxy=off behaviour.
+	srv, _, _ := newTestServer(t)
+	srv.SetTrustProxy(true)
+
+	r := reqWithRemoteAndHeaders("10.0.0.1:5555", nil)
+	got := srv.clientIP(r)
+	if got != "10.0.0.1" {
+		t.Errorf("trustProxy=true with no XFF: got %q, want %q", got, "10.0.0.1")
+	}
+}
+
+func TestClientIP_TrustProxyOn_EmptyXFF_FallsBack(t *testing.T) {
+	// XFF set to empty string (or just whitespace) — same as missing.
+	srv, _, _ := newTestServer(t)
+	srv.SetTrustProxy(true)
+
+	r := reqWithRemoteAndHeaders("10.0.0.1:5555", map[string]string{
+		"X-Forwarded-For": "   ",
+	})
+	got := srv.clientIP(r)
+	if got != "10.0.0.1" {
+		t.Errorf("trustProxy=true with whitespace XFF: got %q, want %q", got, "10.0.0.1")
+	}
+}
+
+func TestClientIP_IPv6_RemoteAddr(t *testing.T) {
+	// IPv6 RemoteAddr is "[::1]:port" — bracketed. The previous
+	// strings.Cut(":") implementation cut on the first colon (which is
+	// inside the bracket) and returned "[", which would then match "["
+	// as the rate-limit key for every IPv6 client. net.SplitHostPort
+	// handles bracketed forms correctly.
+	srv, _, _ := newTestServer(t)
+
+	r := reqWithRemoteAndHeaders("[::1]:8080", nil)
+	got := srv.clientIP(r)
+	if got != "::1" {
+		t.Errorf("IPv6 RemoteAddr: got %q, want %q", got, "::1")
+	}
+
+	r = reqWithRemoteAndHeaders("[2001:db8::1]:54321", nil)
+	got = srv.clientIP(r)
+	if got != "2001:db8::1" {
+		t.Errorf("IPv6 RemoteAddr (full): got %q, want %q", got, "2001:db8::1")
+	}
+}
+
+func TestRateLimit_TrustProxyOn_PerXFFClient_Integration(t *testing.T) {
+	// End-to-end integration: same TCP source (the proxy), different
+	// XFF values (different real clients). Rate limit MUST apply per
+	// XFF-derived client, not per RemoteAddr — otherwise a single proxy
+	// fronting many clients hits the cap on the first burst.
+	srv, _, _ := newTestServer(t)
+	srv.SetTrustProxy(true)
+	srv.SetRateLimit(1, time.Minute)
+
+	makeReq := func(xff string) *httptest.ResponseRecorder {
+		req := reqWithRemoteAndHeaders("10.0.0.1:5555", map[string]string{
+			"X-Forwarded-For": xff,
+		})
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		return w
+	}
+
+	// Client A's first request: allowed.
+	if w := makeReq("1.2.3.4"); w.Code != http.StatusOK {
+		t.Fatalf("client A first request: got %d, want 200", w.Code)
+	}
+	// Client B's first request, same RemoteAddr (proxy IP): MUST be allowed.
+	// If we were keying on RemoteAddr, this would 429. We're not, so it's 200.
+	if w := makeReq("9.10.11.12"); w.Code != http.StatusOK {
+		t.Fatalf("client B first request (same proxy, different XFF): got %d, want 200", w.Code)
+	}
+	// Client A's second request: now over the per-client limit.
+	if w := makeReq("1.2.3.4"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("client A second request: got %d, want 429", w.Code)
+	}
+}
+
+func TestRateLimit_TrustProxyOff_XFFSpoofIgnored_Integration(t *testing.T) {
+	// The negative companion: with --trust-proxy OFF, two requests with
+	// the same RemoteAddr but different (spoofed) XFF MUST still hit the
+	// rate limit. This is what prevents a malicious direct caller from
+	// rotating XFF values to bypass per-IP throttling.
+	srv, _, _ := newTestServer(t)
+	// trustProxy stays false.
+	srv.SetRateLimit(1, time.Minute)
+
+	makeReq := func(xff string) *httptest.ResponseRecorder {
+		req := reqWithRemoteAndHeaders("10.0.0.1:5555", map[string]string{
+			"X-Forwarded-For": xff,
+		})
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		return w
+	}
+
+	if w := makeReq("1.2.3.4"); w.Code != http.StatusOK {
+		t.Fatalf("first request: got %d, want 200", w.Code)
+	}
+	// Same RemoteAddr, different XFF — XFF is ignored, so this is the same
+	// rate-limit key. MUST hit the cap.
+	if w := makeReq("9.10.11.12"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request (XFF spoof attempt): got %d, want 429", w.Code)
+	}
+}

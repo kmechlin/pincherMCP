@@ -482,7 +482,7 @@ Responses compress ~65% with `Accept-Encoding: gzip`.
 
 **Tested clients:** curl, Python `requests`, PowerShell `Invoke-WebRequest`
 
-**Rate limiting:** `--http-rate 60` limits to 60 requests/IP/minute (0 = unlimited).
+**Rate limiting:** `--http-rate 60` limits to 60 requests/IP/minute (0 = unlimited). When combined with `--trust-proxy`, the rate-limit key is derived from the leftmost entry in `X-Forwarded-For` instead of the TCP source address — so per-client limits apply correctly behind a reverse proxy. Without `--trust-proxy`, `X-Forwarded-For` is ignored: direct callers cannot spoof the key by setting the header themselves.
 
 ### Additional HTTP endpoints
 
