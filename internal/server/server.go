@@ -1049,8 +1049,8 @@ func (s *Server) registerTools() {
 			"type":"object","required":["query"],"properties":{
 				"query":{"type":"string","description":"FTS5 search query. Supports: prefix (auth*), phrase (\"login flow\"), AND/OR."},
 				"project":{"type":"string"},
-				"kind":{"type":"string","description":"Filter by symbol kind: Function|Method|Class|Interface|Enum|Type|Variable|Module"},
-				"language":{"type":"string","description":"Filter by language: Go|Python|TypeScript|etc"},
+				"kind":{"type":"string","description":"Filter by symbol kind: Function|Method|Class|Interface|Enum|Type|Variable|Module|Setting|Section|Document|Resource|DataSource|Output|Local|Provider|Block"},
+				"language":{"type":"string","description":"Filter by language: Go|Python|TypeScript|HCL|YAML|Markdown|etc"},
 				"limit":{"type":"integer","description":"Max results (default 20)"},
 				"fields":{"type":"string","description":"Comma-separated fields to include in each result, e.g. 'id,name,file_path'. Omit for all fields. Use to reduce token usage when you only need IDs or signatures."}
 			}
