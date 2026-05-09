@@ -124,22 +124,18 @@ var kindBaseline = map[string]float64{
 //
 // First match wins; order matters only when two patterns could both fire on
 // the same path (vendor/ vs. node_modules/ are mutually exclusive in practice).
+// Invariant: every entry here must be reachable. Files rejected by
+// ast.ShouldSkip never enter the confidence pipeline, so adding (e.g.)
+// `package-lock.json` here is dead code — those names belong in
+// blocklist.go's lockfileNames map. `TestPathPatterns_AllReachable`
+// pins this invariant; if you add a new entry that ShouldSkip would
+// reject, that test will fail with the redundant pattern named.
 var pathPatterns = []pathPattern{
-	// Lockfiles — generated, shouldn't be queried like real config.
-	{Glob: "package-lock.json", Penalty: -0.40, Reason: "npm lockfile"},
-	{Glob: "yarn.lock", Penalty: -0.40, Reason: "yarn lockfile"},
-	{Glob: "Gemfile.lock", Penalty: -0.40, Reason: "bundler lockfile"},
-	{Glob: "Cargo.lock", Penalty: -0.40, Reason: "cargo lockfile"},
-	{Glob: "Pipfile.lock", Penalty: -0.40, Reason: "pipenv lockfile"},
-	{Glob: "poetry.lock", Penalty: -0.40, Reason: "poetry lockfile"},
-	{Glob: "go.sum", Penalty: -0.40, Reason: "go module checksums"},
-	{Glob: "composer.lock", Penalty: -0.40, Reason: "composer lockfile"},
-	{Glob: "pnpm-lock.yaml", Penalty: -0.40, Reason: "pnpm lockfile"},
+	// Terraform provider lockfile — the only lockfile-shaped file that's
+	// NOT in blocklist.go (HCL is a real source language, the basename
+	// disambiguates it from regular .hcl). Kept here so its symbols rank
+	// below first-party HCL.
 	{Glob: ".terraform.lock.hcl", Penalty: -0.40, Reason: "terraform provider lockfile"},
-	// Minified / build output — not source.
-	{Glob: "*.min.js", Penalty: -0.40, Reason: "minified JS"},
-	{Glob: "*.min.css", Penalty: -0.40, Reason: "minified CSS"},
-	{Glob: "*.map", Penalty: -0.40, Reason: "source map"},
 	// Vendored third-party — real, but not first-party signal.
 	{Glob: "vendor", Penalty: -0.30, IsDir: true, Reason: "vendored third-party code"},
 	{Glob: "node_modules", Penalty: -0.30, IsDir: true, Reason: "node third-party"},

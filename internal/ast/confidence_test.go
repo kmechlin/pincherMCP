@@ -136,13 +136,9 @@ func TestComputeSignals_PathPatterns(t *testing.T) {
 		path        string
 		wantPenalty float64
 	}{
-		// Lockfiles (-0.40)
-		{"package-lock.json", -0.40},
-		{"some/dir/yarn.lock", -0.40},
-		{"go.sum", -0.40},
+		// Terraform provider lockfile (-0.40) — kept; HCL files aren't
+		// blocklisted, so this rule is reachable.
 		{".terraform.lock.hcl", -0.40},
-		// Minified (-0.40)
-		{"app.min.js", -0.40},
 		// Vendored / third-party (-0.30)
 		{"vendor/lib/foo.go", -0.30},
 		{"node_modules/foo/index.js", -0.30},
@@ -158,6 +154,17 @@ func TestComputeSignals_PathPatterns(t *testing.T) {
 		{"src/lib.go", 0},                    // normal source
 		{"docs/architecture.md", 0},          // intentional docs (not README)
 		{"src/build.go", 0},                  // "build" must be a dir, not basename
+		// Names handled by blocklist.go MUST NOT also fire here — those
+		// files never reach computeSignals (ShouldSkip rejects them
+		// upstream), so a -0.40 here would be redundant. If this case
+		// starts returning -0.40, it means someone re-added a dead
+		// pattern; remove it from pathPatterns.
+		{"package-lock.json", 0},
+		{"some/dir/yarn.lock", 0},
+		{"Cargo.lock", 0},
+		{"go.sum", 0},
+		{"app.min.js", 0},
+		{"bundle.js.map", 0},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {
@@ -201,6 +208,39 @@ func TestComputeSignals_IdentBonus(t *testing.T) {
 					c.name, sigs.IdentBonus, c.want)
 			}
 		})
+	}
+}
+
+// TestPathPatterns_AllReachable pins the invariant that every entry in
+// pathPatterns is reachable in production. Files rejected by ShouldSkip
+// never enter the confidence pipeline, so a pathPatterns entry whose Glob
+// is also handled by ShouldSkip is dead code (#114). The IsDir patterns
+// (vendor/, node_modules/, third_party/, dist/, build/, out/) are always
+// reachable because ShouldSkip is basename-only — no directory check.
+//
+// If this test fails, either:
+//  1. Remove the redundant pathPatterns entry — blocklist.go is the
+//     correct home for files that should be hard-rejected; or
+//  2. Remove the entry from blocklist.go's lockfileNames / minified
+//     suffixes / .map check and accept the cost of indexing the file
+//     (rare — see blocklist.go's docstring for why).
+func TestPathPatterns_AllReachable(t *testing.T) {
+	for _, p := range pathPatterns {
+		if p.IsDir {
+			// IsDir patterns match a directory component; ShouldSkip
+			// only checks basenames. They cannot collide.
+			continue
+		}
+		// Construct a synthetic path with the glob as basename. Replace
+		// the leading `*` (suffix-shape) with a stable prefix so
+		// filepath.Match has a concrete name to test.
+		base := strings.Replace(p.Glob, "*", "x", 1)
+		fullPath := "some/dir/" + base
+		if skip, reason := ShouldSkip(fullPath); skip {
+			t.Errorf("pathPattern Glob=%q (%s) is unreachable — ShouldSkip rejects it as %q. "+
+				"Remove this entry from pathPatterns or remove the matching rule from blocklist.go.",
+				p.Glob, p.Reason, reason)
+		}
 	}
 }
 
