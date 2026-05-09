@@ -107,7 +107,13 @@ func ExtractWithModule(source []byte, language, relPath, modulePath string) *Fil
 	}
 	conf := e.Confidence()
 	for i := range result.Symbols {
-		result.Symbols[i].ExtractionConfidence = conf
+		// Per-symbol composition (#34). In Phase 1 every signal contributes
+		// 0 except BaseExtractor (and KindBaseline which falls back to
+		// BaseExtractor), so Compose() returns conf — byte-identical to
+		// today. Phase 2 populates the lookup tables and the snapshot diff
+		// shifts intentionally.
+		sigs := computeSignals(&result.Symbols[i], conf, relPath, source)
+		result.Symbols[i].ExtractionConfidence = sigs.Compose()
 	}
 	return result
 }
