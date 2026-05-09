@@ -114,14 +114,17 @@ func TestExtractBash_OnlyFunctionsExtracted(t *testing.T) {
 	}
 }
 
-func TestExtractBash_ConfidenceOne(t *testing.T) {
+// TestExtractBash_HighConfidence — see note on YAML's HighConfidence test.
+// Asserts >= 0.7 (default min_confidence threshold) rather than exactly 1.0
+// after #34 Phase 2 introduced per-symbol composition.
+func TestExtractBash_HighConfidence(t *testing.T) {
 	result := Extract([]byte(bashSrc), "Bash", "scripts/deploy.sh")
 	if len(result.Symbols) == 0 {
 		t.Fatal("no symbols extracted")
 	}
 	for _, s := range result.Symbols {
-		if s.ExtractionConfidence != 1.0 {
-			t.Errorf("symbol %q confidence = %v, want 1.0", s.Name, s.ExtractionConfidence)
+		if s.ExtractionConfidence < 0.7 {
+			t.Errorf("symbol %q confidence = %v, want >= 0.7", s.Name, s.ExtractionConfidence)
 			break
 		}
 	}

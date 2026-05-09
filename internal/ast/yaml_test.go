@@ -58,11 +58,18 @@ func TestExtractYAML_AllSettingKind(t *testing.T) {
 	}
 }
 
-func TestExtractYAML_ConfidenceOne(t *testing.T) {
+// TestExtractYAML_HighConfidence asserts the YAML extractor produces
+// symbols at or above the default min_confidence threshold (0.7). Was
+// "exactly 1.0" before #34 Phase 2; that's no longer the right number
+// since per-symbol composition (kindBaseline + path/ident signals) shifts
+// the post-composition score below 1.0 for some kinds. Threshold-based
+// assertion preserves the intent ("parser-backed extractors produce
+// high-confidence symbols") while tolerating composition.
+func TestExtractYAML_HighConfidence(t *testing.T) {
 	result := Extract([]byte(yamlSrc), "YAML", "docker-compose.yml")
 	for _, s := range result.Symbols {
-		if s.ExtractionConfidence != 1.0 {
-			t.Errorf("symbol %q confidence = %v, want 1.0", s.QualifiedName, s.ExtractionConfidence)
+		if s.ExtractionConfidence < 0.7 {
+			t.Errorf("symbol %q confidence = %v, want >= 0.7", s.QualifiedName, s.ExtractionConfidence)
 			break
 		}
 	}

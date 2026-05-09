@@ -1,6 +1,6 @@
 {
   "avg_confidence_by_kind": {
-    "Section": 1
+    "Section": 0.85
   },
   "edge_count_by_kind": {},
   "extraction_failures_by_reason": {},

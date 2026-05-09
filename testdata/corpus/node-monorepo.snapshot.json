@@ -1,8 +1,8 @@
 {
   "avg_confidence_by_kind": {
-    "Class": 0.85,
-    "Function": 0.85,
-    "Section": 1,
+    "Class": 0.975,
+    "Function": 0.975,
+    "Section": 0.9125,
     "Setting": 1
   },
   "edge_count_by_kind": {},

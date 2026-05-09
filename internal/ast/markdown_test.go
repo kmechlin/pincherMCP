@@ -191,15 +191,17 @@ func TestExtractMarkdown_PreservesOriginalTitle(t *testing.T) {
 	}
 }
 
-// TestExtractMarkdown_ConfidenceIs1 confirms goldmark routing produces
-// confidence 1.0 (parser-backed, not regex).
-func TestExtractMarkdown_ConfidenceIs1(t *testing.T) {
+// TestExtractMarkdown_HighConfidence confirms goldmark routing produces
+// parser-backed (high) confidence — was "exactly 1.0" before #34 Phase 2;
+// now asserts >= 0.7 (default min_confidence threshold) since per-symbol
+// composition shifts the post-composition score.
+func TestExtractMarkdown_HighConfidence(t *testing.T) {
 	r := Extract([]byte("# H\n\ntext\n"), "Markdown", "docs/x.md")
 	if len(r.Symbols) != 1 {
 		t.Fatalf("got %d, want 1", len(r.Symbols))
 	}
-	if r.Symbols[0].ExtractionConfidence != 1.0 {
-		t.Errorf("confidence = %v, want 1.0", r.Symbols[0].ExtractionConfidence)
+	if r.Symbols[0].ExtractionConfidence < 0.7 {
+		t.Errorf("confidence = %v, want >= 0.7", r.Symbols[0].ExtractionConfidence)
 	}
 }
 
