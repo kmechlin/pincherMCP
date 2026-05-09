@@ -156,14 +156,17 @@ func TestExtractHCL_NestedBlocks(t *testing.T) {
 	}
 }
 
-func TestExtractHCL_ConfidenceOne(t *testing.T) {
+// TestExtractHCL_HighConfidence — see note on YAML's HighConfidence test.
+// Asserts >= 0.7 (default min_confidence threshold) rather than exactly 1.0
+// after #34 Phase 2 introduced per-symbol composition.
+func TestExtractHCL_HighConfidence(t *testing.T) {
 	result := Extract([]byte(tfMixedSrc), "HCL", "main.tf")
 	if len(result.Symbols) == 0 {
 		t.Fatal("no symbols extracted")
 	}
 	for _, s := range result.Symbols {
-		if s.ExtractionConfidence != 1.0 {
-			t.Errorf("symbol %q confidence = %v, want 1.0", s.QualifiedName, s.ExtractionConfidence)
+		if s.ExtractionConfidence < 0.7 {
+			t.Errorf("symbol %q confidence = %v, want >= 0.7", s.QualifiedName, s.ExtractionConfidence)
 			break
 		}
 	}

@@ -197,14 +197,16 @@ func TestExtractJinja2_RegisteredExtensions(t *testing.T) {
 	}
 }
 
-// TestExtractJinja2_ConfidenceIs1 confirms parser-backed routing
-// produces confidence 1.0.
-func TestExtractJinja2_ConfidenceIs1(t *testing.T) {
+// TestExtractJinja2_HighConfidence confirms parser-backed routing
+// produces high confidence — was "exactly 1.0" before #34 Phase 2;
+// now asserts >= 0.7 (default min_confidence threshold) since per-symbol
+// composition shifts the post-composition score.
+func TestExtractJinja2_HighConfidence(t *testing.T) {
 	r := jinjaExtract(t, "{% set x = 1 %}\n")
 	if len(r.Symbols) != 1 {
 		t.Fatalf("got %d, want 1", len(r.Symbols))
 	}
-	if r.Symbols[0].ExtractionConfidence != 1.0 {
-		t.Errorf("confidence = %v, want 1.0", r.Symbols[0].ExtractionConfidence)
+	if r.Symbols[0].ExtractionConfidence < 0.7 {
+		t.Errorf("confidence = %v, want >= 0.7", r.Symbols[0].ExtractionConfidence)
 	}
 }

@@ -1,21 +1,24 @@
 package ast
 
-// Per-symbol confidence scoring (#34 Phase 1 — substrate, zero behavior change).
+import (
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+// Per-symbol confidence scoring (#34).
 //
-// Today every symbol from a given extractor gets that extractor's per-language
-// constant (1.0 / 0.85 / 0.70). Phase 1 introduces the composition machinery
-// without changing any output: kindBaseline is empty, pathPatterns is empty,
-// every signal contributes 0. Compose() reduces to the per-extractor constant
-// for every symbol, byte-identical to today. The snapshot diff for this PR is
-// zero — that is the gate.
+// Phase 1 (#105 ✅): introduced the Signals + Compose() machinery with all
+// signals at zero — net behavior identical to per-language constants.
+// Phase 2 (this PR): populates kindBaseline + pathPatterns; wires identifier-
+// shape and generated-marker signals. The pinned-corpus snapshot diff in
+// this PR IS the rationale — every confidence shift traces to one signal.
 //
-// Phase 2 (separate PR) populates the lookup tables and wires the per-symbol
-// signals; that PR's snapshot diff is the rationale.
+// Future:
+// - Phase 3 — tool surface (min_confidence + _meta.confidence_distribution)
+// - Phase 4 — default min_confidence flip from 0.0 → 0.7
 //
-// Phase 4 (separate PR) flips default min_confidence from 0.0 → 0.7 in the
-// search/query/trace tools. Until then, scores are informational, not gating.
-//
-// See design/per-symbol-confidence.md for the full rationale.
+// See design/per-symbol-confidence.md for the full plan.
 
 // Signals carries the per-symbol score components. Each field is a pure
 // function of (extractor output, file path, kind, source). Compose() reduces
@@ -81,15 +84,85 @@ func (s Signals) Compose() float64 {
 }
 
 // kindBaseline maps symbol kinds to their structural-informativeness
-// baseline. EMPTY in Phase 1 — every kind falls back to BaseExtractor in
-// computeSignals, preserving today's per-language constant. Phase 2 (separate
-// PR) populates this with values like Function:1.0, Setting:0.95, Section:0.80.
-var kindBaseline = map[string]float64{}
+// baseline. Symbols with kinds not in the table fall back to BaseExtractor
+// in computeSignals, so unknown kinds keep today's per-language behavior.
+//
+// Values reflect "how much load-bearing structure does this kind carry?":
+//   - First-class code constructs (Function/Method/Class/Interface) score 1.0
+//   - Configuration symbols (Setting/Variable/Resource) score 0.95
+//   - Structural blocks (Block) score 0.85
+//   - Documentation kinds (Section/Heading) score 0.80
+//   - Loose-prose kinds (Document/CodeSnippet) score 0.70
+var kindBaseline = map[string]float64{
+	"Function":    1.00,
+	"Method":      1.00,
+	"Class":       1.00,
+	"Interface":   1.00,
+	"Type":        1.00,
+	"Enum":        1.00,
+	"Module":      0.95,
+	"Variable":    0.95,
+	"Setting":     0.95,
+	"Resource":    0.95,
+	"DataSource":  0.95,
+	"Output":      0.95,
+	"Provider":    0.95,
+	"Local":       0.95,
+	"Block":       0.85,
+	"Section":     0.80,
+	"Heading":     0.80,
+	"Document":    0.70,
+	"CodeSnippet": 0.70,
+}
 
-// pathPatterns lists path-shape penalties (lockfile, vendor/, README, etc.).
-// EMPTY in Phase 1 — no path produces a penalty. Phase 2 (separate PR)
-// populates this with the curated list from the design doc.
-var pathPatterns []pathPattern
+// pathPatterns lists path-shape penalties. Each rule is reviewable by intent
+// (Reason field surfaces in tests + future diagnostics). The list is
+// deliberately conservative — only patterns where the wrong-direction signal
+// is unambiguous (lockfile = generated; vendor/ = third-party; README =
+// low-priority docs). Project-specific patterns belong in user config, not
+// this global table.
+//
+// First match wins; order matters only when two patterns could both fire on
+// the same path (vendor/ vs. node_modules/ are mutually exclusive in practice).
+var pathPatterns = []pathPattern{
+	// Lockfiles — generated, shouldn't be queried like real config.
+	{Glob: "package-lock.json", Penalty: -0.40, Reason: "npm lockfile"},
+	{Glob: "yarn.lock", Penalty: -0.40, Reason: "yarn lockfile"},
+	{Glob: "Gemfile.lock", Penalty: -0.40, Reason: "bundler lockfile"},
+	{Glob: "Cargo.lock", Penalty: -0.40, Reason: "cargo lockfile"},
+	{Glob: "Pipfile.lock", Penalty: -0.40, Reason: "pipenv lockfile"},
+	{Glob: "poetry.lock", Penalty: -0.40, Reason: "poetry lockfile"},
+	{Glob: "go.sum", Penalty: -0.40, Reason: "go module checksums"},
+	{Glob: "composer.lock", Penalty: -0.40, Reason: "composer lockfile"},
+	{Glob: "pnpm-lock.yaml", Penalty: -0.40, Reason: "pnpm lockfile"},
+	{Glob: ".terraform.lock.hcl", Penalty: -0.40, Reason: "terraform provider lockfile"},
+	// Minified / build output — not source.
+	{Glob: "*.min.js", Penalty: -0.40, Reason: "minified JS"},
+	{Glob: "*.min.css", Penalty: -0.40, Reason: "minified CSS"},
+	{Glob: "*.map", Penalty: -0.40, Reason: "source map"},
+	// Vendored third-party — real, but not first-party signal.
+	{Glob: "vendor", Penalty: -0.30, IsDir: true, Reason: "vendored third-party code"},
+	{Glob: "node_modules", Penalty: -0.30, IsDir: true, Reason: "node third-party"},
+	{Glob: "third_party", Penalty: -0.30, IsDir: true, Reason: "third-party deps"},
+	// Build artefacts.
+	{Glob: "dist", Penalty: -0.20, IsDir: true, Reason: "build output"},
+	{Glob: "build", Penalty: -0.20, IsDir: true, Reason: "build output"},
+	{Glob: "out", Penalty: -0.20, IsDir: true, Reason: "build output"},
+	// Low-priority docs.
+	{Glob: "README.md", Penalty: -0.20, Reason: "project README"},
+	{Glob: "CHANGELOG.md", Penalty: -0.20, Reason: "changelog"},
+	{Glob: "CONTRIBUTING.md", Penalty: -0.20, Reason: "contributing guide"},
+}
+
+// identRE matches a clean programming-style identifier — letter/underscore
+// followed by letters, digits, or underscores. A name that matches gets a
+// small bonus; a name that's empty or whitespace gets a penalty.
+var identRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// generatedHeadLimit caps how much of the file head we scan for the
+// `// Code generated` marker. The marker lives in the first 5 lines of any
+// reasonable generator output; 1KB is generous and bounds the cost.
+const generatedHeadLimit = 1024
 
 // pathPattern is a single path-shape rule. Phase 2 will populate the global
 // list; defining the type now lets composition tests construct synthetic
@@ -105,12 +178,19 @@ type pathPattern struct {
 	Reason string
 }
 
-// computeSignals builds the Signals struct for one symbol. In Phase 1 every
-// signal except BaseExtractor and KindBaseline (== BaseExtractor by fallback)
-// is zero, so the composed score equals BaseExtractor for every symbol.
+// computeSignals builds the Signals struct for one symbol.
 //
-// Phase 2 populates the lookup tables; this function's signature stays
-// the same so the wiring in extractor.go doesn't change between phases.
+// Phase 2: populates kindBaseline lookup, pathPatterns iteration, identifier
+// shape bonus, and generated-marker penalty. BreadthPenalty and LeafPenalty
+// remain stubbed — they need parent fan-out / leaf-vs-mapping info from the
+// extractor, which would require a per-extractor wiring pass. Phase 2 keeps
+// the signal set to those that are computable from (sym, relPath, source)
+// alone, so the diff is bounded.
+//
+// Pure function: same inputs always produce the same Signals. The caller
+// chains Compose() to get the final score. Identifier-bonus and generated-
+// marker scans are bounded (generatedHeadLimit clamps the source scan), so
+// per-symbol cost stays roughly constant regardless of file size.
 func computeSignals(sym *ExtractedSymbol, baseExtractor float64, relPath string, source []byte) Signals {
 	s := Signals{BaseExtractor: baseExtractor}
 
@@ -120,31 +200,76 @@ func computeSignals(sym *ExtractedSymbol, baseExtractor float64, relPath string,
 		s.KindBaseline = baseExtractor
 	}
 
-	// Phase 1: pathPatterns is empty, so this loop is a no-op. The structure
-	// is here so Phase 2 can populate the table without touching wiring.
+	// First-match path penalty.
 	for _, p := range pathPatterns {
-		penalty := matchPathPattern(relPath, p)
-		if penalty != 0 {
+		if penalty := matchPathPattern(relPath, p); penalty != 0 {
 			s.PathPenalty = penalty
 			break
 		}
 	}
 
-	// IdentBonus / GeneratedPen / BreadthPenalty / LeafPenalty are all
-	// intentionally not computed in Phase 1. Adding them is the Phase 2 PR;
-	// adding them here would change the snapshot output.
+	// Identifier-shape bonus / penalty. Empty or whitespace-only names are a
+	// regex-extractor failure mode (capture group matched but extracted blank).
+	switch {
+	case identRE.MatchString(sym.Name):
+		s.IdentBonus = 0.05
+	case strings.TrimSpace(sym.Name) == "":
+		s.IdentBonus = -0.10
+	}
+
+	// Generated-file penalty fires once for every symbol in a generated file.
+	if isGeneratedFile(source) {
+		s.GeneratedPen = -0.30
+	}
 
 	return s
 }
 
 // matchPathPattern returns the pattern's Penalty when relPath matches, else 0.
-// Pulled out so per-pattern matching is unit-testable in isolation.
 //
-// Phase 1: invoked from a no-op loop (pathPatterns is empty). Phase 2 turns
-// this into the real per-symbol path check.
+// Two match modes:
+//   - IsDir: returns Penalty if any directory component of relPath equals Glob
+//     exactly (e.g. "vendor" matches "vendor/x/y.go" but not "myvendor/x.go")
+//   - default: returns Penalty if filepath.Base(relPath) matches Glob via
+//     filepath.Match (POSIX glob; supports `*`, `?`, `[...]`)
 func matchPathPattern(relPath string, p pathPattern) float64 {
-	// Phase 2 wires real glob matching here. Phase 1 keeps the function as a
-	// stub that always returns 0, so even synthetic signal construction in
-	// tests can't accidentally short-circuit through.
+	if p.IsDir {
+		if pathContainsDir(relPath, p.Glob) {
+			return p.Penalty
+		}
+		return 0
+	}
+	matched, err := filepath.Match(p.Glob, filepath.Base(relPath))
+	if err == nil && matched {
+		return p.Penalty
+	}
 	return 0
+}
+
+// pathContainsDir checks whether dir is exactly one of the slash-separated
+// components of relPath. Path separators are normalised to `/` so Windows
+// callers work the same as POSIX.
+func pathContainsDir(relPath, dir string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(relPath), "/") {
+		if part == dir {
+			return true
+		}
+	}
+	return false
+}
+
+// isGeneratedFile inspects the head of source for the canonical
+// `// Code generated` marker emitted by go generate, protoc, swagger, etc.
+// Bounded to generatedHeadLimit bytes so cost is fixed regardless of file size.
+func isGeneratedFile(source []byte) bool {
+	head := source
+	if len(head) > generatedHeadLimit {
+		head = head[:generatedHeadLimit]
+	}
+	if len(head) == 0 {
+		return false
+	}
+	// strings.Contains on the byte slice is allocation-free in Go's stdlib
+	// because the string conversion of a byte slice is the same memory.
+	return strings.Contains(string(head), "Code generated")
 }

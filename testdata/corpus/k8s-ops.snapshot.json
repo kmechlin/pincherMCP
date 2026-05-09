@@ -1,7 +1,7 @@
 {
   "avg_confidence_by_kind": {
-    "Section": 1,
-    "Setting": 1
+    "Section": 0.9167,
+    "Setting": 0.9987
   },
   "edge_count_by_kind": {},
   "extraction_failures_by_reason": {},
