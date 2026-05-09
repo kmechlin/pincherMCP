@@ -128,12 +128,27 @@ jobs:
     continue-on-error: true
     env:
       # CI-baseline thresholds. Slightly above local-dev defaults
-      # (0.20/0.30) to absorb runner-to-runner variance — but as #161
-      # showed, even this is too tight on outlier runs. Widening
-      # without variance data would just push the gate toward
-      # meaninglessness.
+      # (0.20/0.30) to absorb runner-to-runner variance.
       BENCH_NS_THRESHOLD: "0.30"
       BENCH_ALLOCS_THRESHOLD: "0.45"
+      # Excluded benchmarks — observed unstable on CI:
+      #
+      # - Index_Incremental_NoChange_GoProject — 21.5% CV per
+      #   testdata/bench/variance-ci-2026-05-09.md (I/O-bound, FS
+      #   cache fluctuation).
+      #
+      # - Auth_TimingProfile/* — tiny ns/op (4-100k ns) measuring
+      #   constant-time auth. Within-run CV is <1% (variance data),
+      #   but the *absolute* ns shifts 2x across CI runner-pool
+      #   reallocations (committed baseline 48k ns, recent runs
+      #   100k+ ns). Any percentage gate on single-digit-microsecond
+      #   benchmarks turns small absolute jitter into huge
+      #   percentage deltas.
+      #
+      # Excluded benches still appear in the output with [EXCLUDED]
+      # marker, so a regression that masks a real bug is still
+      # visible to a human reading the action log.
+      BENCH_EXCLUDE: "BenchmarkIndex_Incremental_NoChange_GoProject,BenchmarkAuth_TimingProfile/correct,BenchmarkAuth_TimingProfile/wrong_first_byte,BenchmarkAuth_TimingProfile/wrong_last_byte,BenchmarkAuth_TimingProfile/wrong_long_prefix_match,BenchmarkAuth_TimingProfile/wrong_same_length,BenchmarkAuth_TimingProfile/wrong_short"
     steps:
       - uses: actions/checkout@v4
 
@@ -155,10 +170,12 @@ jobs:
           go run ./cmd/benchcmp \
             -ns-threshold=$BENCH_NS_THRESHOLD \
             -allocs-threshold=$BENCH_ALLOCS_THRESHOLD \
+            -exclude="$BENCH_EXCLUDE" \
             testdata/bench/index.bench.txt ci-bench-actual/index.bench.txt
           go run ./cmd/benchcmp \
             -ns-threshold=$BENCH_NS_THRESHOLD \
             -allocs-threshold=$BENCH_ALLOCS_THRESHOLD \
+            -exclude="$BENCH_EXCLUDE" \
             testdata/bench/server.bench.txt ci-bench-actual/server.bench.txt
 
       - name: Upload CI-actual bench output (for re-baselining)
