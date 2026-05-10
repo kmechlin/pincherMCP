@@ -7,6 +7,23 @@ minors.
 
 ## [Unreleased]
 
+## [v0.11.1] — 2026-05-10 — Supervisor: response-loss patch
+
+Patch release for the in-flight-response loss that broke `pincher supervised`
+on binary upgrade ([#371](https://github.com/kwad77/pincher/issues/371)).
+
+The v0.11.0 supervisor was the right design but two bugs prevented it from
+working end-to-end: a server-side ordering bug that lost every post-upgrade
+response (#371's load-bearing root cause), and a supervisor-side bug that
+forwarded the new inner's `initialize` reply with a stale id and broke
+JSON-RPC framing. Both are fixed; supervised mode now works as advertised.
+
+This release also adds `internal/supervisor/cmd/probe` — a maintained
+diagnostic harness that drives a real pincher (bare or supervised) through
+the post-bump auto-restart sequence and reports per-call response delivery.
+This is the harness that surfaced #371; keeping it in tree saves future
+maintainers from re-deriving it.
+
 ### Fixed
 - **Supervisor respawn no longer leaks a duplicate `initialize`
   response or stray startup notifications to the client (#371,
