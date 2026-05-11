@@ -7,6 +7,67 @@ minors.
 
 ## [Unreleased]
 
+## [v0.12.0] — 2026-05-10 — pinchQL parens + dogfood-driven cleanup
+
+One feature, five fixes — every fix surfaced by a single full-surface
+dogfood pass against pincher's own repo. Each one had a self-incriminating
+witness: a tool description that promised behaviour the code didn't
+deliver, a test pinning a silent no-op, a watcher whose top-level scope
+was the only thing standing between agents and stale results.
+
+### Added
+- **pinchQL: parenthesized `WHERE` groups
+  ([#362](https://github.com/kwad77/pincher/issues/362)).** The flat
+  `[]condition` representation couldn't express `A AND (B OR C)` — left-
+  to-right composition collapsed it to `(A AND B) OR C`. New recursive-
+  descent parser builds a `whereExpr` tree (condExpr / binaryExpr /
+  notExpr) so parens and `NOT (...)` are first-class. Pure AND chains
+  still push down to SQL; trees with OR / parens / group-NOT route
+  through Go evaluation. Fixes a latent OR bug in `runBFS` along the
+  way: the start-node prefilter pushed `fromVar` equalities even when
+  the WHERE was OR-joined, so `WHERE a.name='X' OR a.name='Y'` started
+  from zero rows.
+
+### Fixed
+- **`search corpus=docs` no longer floors out Markdown sections by
+  default ([#379](https://github.com/kwad77/pincher/issues/379)).**
+  The 0.71 confidence baseline filters doc-section noise from code-
+  corpus searches, but it was wrong-way-around for explicit
+  `corpus=docs` calls (Markdown sections extract at 0.7-0.81). Default
+  flips to 0.0 when the caller asks for the docs corpus.
+
+- **`architecture` hotspots no longer include script-local Variables
+  ([#380](https://github.com/kwad77/pincher/issues/380)).** Pre-fix,
+  the top hotspot in pincher-repo was `plugin/scripts/install.js::result#Variable`
+  — a JS local accumulator, with a `next_steps` recommendation to
+  read its source. New `isHotspotKind` filter restricts to Function /
+  Method / Class / Interface / Type / Module so the change-risk
+  surface is what surfaces.
+
+- **Watcher detects edits in subdirectories
+  ([#377](https://github.com/kwad77/pincher/issues/377)).** `hasChanges`
+  used `os.ReadDir(p.Path)` — top-level only. Real Go projects keep
+  source under `internal/`, so edits never triggered a re-index until
+  an explicit `index` call. Replaced with `filepath.WalkDir` + the
+  existing `isSkippedDir` set; early-exits on first newer file.
+
+- **`list prune_dead=true` is orthogonal to `include_dead=true`
+  ([#378](https://github.com/kwad77/pincher/issues/378)).** Pre-fix
+  the prune branch was nested inside `if !includeDead { ... }`, so
+  combining the two silently no-op'd the prune. The natural read is
+  "show dead rows AND delete them" — audit + cleanup. Now both flags
+  work together; the `pruned` field reports exactly what got removed.
+
+- **`context` returns in-file callees, not just imports
+  ([#381](https://github.com/kwad77/pincher/issues/381)).** The tool
+  description promised "everything it directly imports/calls" but
+  `handleContext` only followed IMPORTS edges. A function calling 3
+  in-file helpers got back zero callees and the agent had to chase
+  each one. New `callees` field follows CALLS edges, de-duplicated
+  against `imports` so a symbol that's both imported and called
+  appears once. The `suggestContextNextSteps` rationale ("context
+  already showed callees") finally tells the truth.
+
 ## [v0.11.1] — 2026-05-10 — Supervisor: response-loss patch
 
 Patch release for the in-flight-response loss that broke `pincher supervised`
