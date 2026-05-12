@@ -2741,6 +2741,23 @@ func TestServeHTTP_PostList(t *testing.T) {
 	}
 }
 
+// #590: GET / redirects to /v1/dashboard so users typing the bare
+// URL in a browser hit the dashboard instead of "method not
+// allowed — use POST /v1/{tool}". Pre-fix the front door was a
+// 405 page from the unrouted bare path.
+func TestServeHTTP_RootRedirectsToDashboard(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	w := httpGet(t, srv, "/")
+	if w.Code != http.StatusFound {
+		t.Fatalf("GET /: got %d, want 302", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if loc != "/v1/dashboard" {
+		t.Errorf("redirect target: got %q, want %q", loc, "/v1/dashboard")
+	}
+}
+
 // #588: /v1/health + /v1/openapi.json must be reachable without
 // bearer auth even when --http-key is set, so container
 // orchestrators can liveness-probe the server without sharing the
