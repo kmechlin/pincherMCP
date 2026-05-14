@@ -2,9 +2,9 @@ package index
 
 import (
 	"context"
-	"os/exec"
 	"testing"
 
+	"github.com/kwad77/pincher/internal/ast"
 	"github.com/kwad77/pincher/internal/db"
 )
 
@@ -20,7 +20,7 @@ import (
 // path that emits Module symbols for Python, so the resolver can't
 // match either side without it.
 func TestIndex_PythonImportsResolveAcrossSrcLayout(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
+	if !ast.PythonAvailable() {
 		t.Skip("python3 not on PATH; Python AST resolution test skipped")
 	}
 
@@ -84,7 +84,7 @@ def run():
 // PythonImportCandidates expansion prepends the source root to find the
 // real helper symbol QN.
 func TestIndex_PythonCallsResolveAcrossFiles(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
+	if !ast.PythonAvailable() {
 		t.Skip("python3 not on PATH; Python CALLS resolution test skipped")
 	}
 
@@ -134,7 +134,7 @@ def run():
 // Same-class self.X() call: the extractor rewrites `self.helper()` to the
 // class-qualified target so the resolver can match the method's actual QN.
 func TestIndex_PythonCallsResolveSelfMethod(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
+	if !ast.PythonAvailable() {
 		t.Skip("python3 not on PATH")
 	}
 
@@ -186,7 +186,7 @@ func TestIndex_PythonCallsResolveSelfMethod(t *testing.T) {
 // emit Module symbols — IMPORTS stays unresolved. This is the negative
 // baseline that proves the AST path is doing the resolution work.
 func TestIndex_PythonImportsUnresolvedWithoutAST(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
+	if !ast.PythonAvailable() {
 		t.Skip("python3 not on PATH")
 	}
 	t.Setenv("PINCHER_DISABLE_PY_AST", "1")

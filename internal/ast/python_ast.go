@@ -11,13 +11,14 @@ import (
 	"time"
 )
 
-// Python AST extractor. Shells out to `python3` running an embedded helper
-// script that uses CPython's `ast` module to parse the file and emit a JSON
-// summary. The Go side unmarshals that into the standard FileResult shape.
+// Python AST extractor. Shells out to a CPython 3 interpreter running an
+// embedded helper script that uses the stdlib `ast` module to parse the
+// file and emit a JSON summary. The Go side unmarshals that into the
+// standard FileResult shape.
 //
-// Default-on when python3 is on PATH (mirrors the JS-AST convention since
-// v0.20.0). Falls back to the regex extractor on parse failure, missing
-// python3, or `PINCHER_DISABLE_PY_AST=1`.
+// Default-on when a working CPython 3 is on PATH (mirrors the JS-AST
+// convention since v0.20.0). Falls back to the regex extractor on parse
+// failure, no working interpreter, or `PINCHER_DISABLE_PY_AST=1`.
 
 //go:embed python_extract.py
 var pythonExtractScript string
@@ -27,34 +28,73 @@ var pythonExtractScript string
 // or a hung subprocess. The regex fallback runs on timeout.
 const pyASTTimeout = 10 * time.Second
 
-// pyASTEnabled reads env vars on every call so tests can flip the flag with
-// t.Setenv without re-registering the extractor.
+// pyProbeTimeout bounds the one-time interpreter-probe subprocess.
+const pyProbeTimeout = 5 * time.Second
+
+// pyASTEnabled reads the opt-out env var on every call so tests can flip
+// the flag with t.Setenv without re-registering the extractor.
 //
 // Resolution order:
 //  1. PINCHER_DISABLE_PY_AST=1 → false (explicit opt-out wins)
-//  2. python3 not on PATH      → false (transparent fallback to regex)
+//  2. no working CPython 3     → false (transparent fallback to regex)
 //  3. otherwise                → true  (default-on)
 func pyASTEnabled() bool {
 	if os.Getenv("PINCHER_DISABLE_PY_AST") == "1" {
 		return false
 	}
-	return python3OnPATH()
+	return pythonCommand() != nil
+}
+
+// PythonAvailable reports whether a working CPython 3 interpreter was
+// found. Exported so tests in other packages (internal/index) can guard
+// Python-AST-dependent cases with the same probe the extractor uses,
+// rather than a bare exec.LookPath that a non-functional shim passes.
+func PythonAvailable() bool {
+	return pythonCommand() != nil
 }
 
 var (
 	pyLookupOnce sync.Once
-	pyAvailable  bool
+	pyCmd        []string // [binaryPath, extraArgs...] to invoke CPython 3; nil if none works
 )
 
-// python3OnPATH caches exec.LookPath so per-file extraction stays a
-// no-syscall fast path after the first call in a process lifetime.
-func python3OnPATH() bool {
+// pythonCommand resolves a working CPython 3 invocation, cached for the
+// process lifetime. It probes candidates in order — `python3` (the POSIX
+// convention), then `python`, then the Windows `py -3` launcher — and
+// VERIFIES each actually executes CPython, not just that the name
+// resolves on PATH.
+//
+// The verification is load-bearing on Windows: `python3.exe` there is
+// frequently a Microsoft Store stub that resolves via exec.LookPath but
+// prints an install prompt and exits non-zero instead of running Python.
+// A bare LookPath check mis-detects that stub as "Python available", and
+// every file then silently falls back to the regex extractor — and the
+// test skip guards mis-fire the same way, running (and failing) instead
+// of skipping. Probing with a trivial `-c` script and checking the
+// output is the only honest signal.
+func pythonCommand() []string {
 	pyLookupOnce.Do(func() {
-		if _, err := exec.LookPath("python3"); err == nil {
-			pyAvailable = true
+		candidates := [][]string{
+			{"python3"},
+			{"python"},
+			{"py", "-3"},
+		}
+		for _, c := range candidates {
+			path, err := exec.LookPath(c[0])
+			if err != nil {
+				continue
+			}
+			args := append(append([]string{}, c[1:]...), "-c", "import sys; sys.stdout.write('pinchok')")
+			ctx, cancel := context.WithTimeout(context.Background(), pyProbeTimeout)
+			out, runErr := exec.CommandContext(ctx, path, args...).Output()
+			cancel()
+			if runErr == nil && string(out) == "pinchok" {
+				pyCmd = append([]string{path}, c[1:]...)
+				return
+			}
 		}
 	})
-	return pyAvailable
+	return pyCmd
 }
 
 // pythonSymbolJSON / pythonEdgeJSON / pythonResponse mirror the JSON shape
@@ -125,10 +165,16 @@ func (r *pythonResponse) toFileResult() *FileResult {
 // non-zero exit, JSON parse error, or Python SyntaxError in the source.
 // The dispatch fn falls back to extractPython on false.
 func extractPythonAST(src []byte, relPath string) (*FileResult, bool) {
+	pyCmd := pythonCommand()
+	if pyCmd == nil {
+		return nil, false
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), pyASTTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "python3", "-c", pythonExtractScript, relPath)
+	args := append(append([]string{}, pyCmd[1:]...), "-c", pythonExtractScript, relPath)
+	cmd := exec.CommandContext(ctx, pyCmd[0], args...)
 	cmd.Stdin = bytes.NewReader(src)
 	out, err := cmd.Output()
 	if err != nil {

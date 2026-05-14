@@ -7,13 +7,13 @@ import (
 
 // Python AST extractor tests. Mirror the javascript_ast_test.go style:
 // direct extractor-level assertions for behaviors regex misses, plus
-// dispatch + env-var checks. The whole file skips when python3 isn't on
-// PATH so CI without Python still passes.
+// dispatch + env-var checks. The whole file skips when no working
+// CPython 3 is on PATH so CI without Python still passes.
 
 func pythonASTOrSkip(t *testing.T) {
 	t.Helper()
-	if !python3OnPATH() {
-		t.Skip("python3 not on PATH; AST tests skipped")
+	if pythonCommand() == nil {
+		t.Skip("no working CPython 3 on PATH; AST tests skipped")
 	}
 }
 
